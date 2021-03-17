@@ -1,4 +1,4 @@
-CLASS zcl_rap_gen_data_model_#### DEFINITION
+CLASS zcl_rap_gen_data_model_####  DEFINITION
 
 PUBLIC
   INHERITING FROM cl_xco_cp_adt_simple_classrun
@@ -46,42 +46,43 @@ PUBLIC
 
     METHODS get_json_string        RETURNING VALUE(json_string) TYPE string.
 
-    METHODS generate_cds_mde         IMPORTING VALUE(io_rap_bo_node) TYPE REF TO zcl_rap_node.
+    METHODS generate_cds_mde         IMPORTING VALUE(io_rap_bo_node)   TYPE REF TO /dmo/cl_rap_node
+                                               VALUE(iv_del_transport) TYPE sxco_transport.
 
 ENDCLASS.
 
 
-CLASS zcl_rap_gen_data_model_#### IMPLEMENTATION.
+CLASS zcl_rap_gen_data_model_####  IMPLEMENTATION.
 
   METHOD constructor.
     super->constructor( ).
 
 **********************************************************************
 **  ACTION NEEDED                                                   **
-**  Replace 5500 with your group ID which is used as suffix.        **
+**  Replace #### with your group ID which is used as suffix.        **
 **   a combination of max 4 numbers and/or characters               **
 **********************************************************************
     unique_group_id        = '####'.   " your group-ID
-    package_name           = |ZRAP_TRAVEL_{ unique_group_id }|.  
+    package_name           = |ZRAP_TRAVEL_{ unique_group_id }|.
     table_name_root        = |zrap_atrav_{ unique_group_id }|.
     table_name_child       = |zrap_abook_{ unique_group_id }|.
   ENDMETHOD.
 
 
-  METHOD main.    
+  METHOD main.
     package_name    = to_upper( package_name ).
     unique_group_id = to_upper( unique_group_id ).
-    
-    out->write( | BEGIN OF GENERATION ({ cl_abap_context_info=>get_system_date(  ) } { cl_abap_context_info=>get_system_time(  ) } UTC) ... | ).    
+
+    out->write( | BEGIN OF GENERATION ({ cl_abap_context_info=>get_system_date(  ) } { cl_abap_context_info=>get_system_time(  ) } UTC) ... | ).
     out->write( | - Package: { package_name } | ).
     out->write( | - Group ID: { unique_group_id } | ).
 
     "create transport request
     DATA(lo_package) = xco_cp_abap_repository=>object->devc->for( package_name ).
     IF NOT lo_package->exists( ).
-      RAISE EXCEPTION TYPE zcx_rap_generator
+      RAISE EXCEPTION TYPE /dmo/cx_rap_generator
         EXPORTING
-          textid   = zcx_rap_generator=>package_does_not_exist
+          textid   = /dmo/cx_rap_generator=>package_does_not_exist
           mv_value = CONV #( package_name ).
     ENDIF.
 
@@ -134,19 +135,17 @@ CLASS zcl_rap_gen_data_model_#### IMPLEMENTATION.
 
     out->write( | - Tables generated and filled with sample data: { table_name_root } & { table_name_child } | ).
 
-    "create RAP BO artefacts according to the JSON document
-    DATA(xco_api)   = NEW zcl_rap_xco_cloud_lib( ).
-    DATA(root_node) = NEW zcl_rap_node(  ).
-    root_node->set_is_root_node( ).
-    root_node->set_xco_lib( xco_api ).
 
-    DATA(rap_bo_visitor) = NEW zcl_rap_xco_json_visitor( root_node ).
-    DATA(json_data)      = xco_cp_json=>data->from_string( json_string ).
-    json_data->traverse( rap_bo_visitor ).
+    DATA(rap_generator) = NEW /dmo/cl_rap_generator( json_string ).
+    DATA(todos) = rap_generator->generate_bo(  ).
+    DATA(rap_bo_name) = rap_generator->root_node->rap_root_node_objects-service_binding.
+    out->write( |RAP BO { rap_bo_name }  generated successfully| ).
+    out->write( |Todo's:| ).
+    LOOP AT todos INTO DATA(todo).
+      out->write( todo ).
+    ENDLOOP.
 
-    DATA(rap_bo_generator) = NEW zcl_rap_bo_generator( root_node ).
-    DATA(lt_todos)         = rap_bo_generator->generate_bo(  ).
-    out->write( | - CDS artefacts generated for RAP BO { root_node->rap_root_node_objects-behavior_definition_i  } | ).
+
 
     " handle findings
     lo_findings = lo_result->findings.
@@ -158,14 +157,35 @@ CLASS zcl_rap_gen_data_model_#### IMPLEMENTATION.
     " handle metadata extensions
     DATA: mo_environment   TYPE REF TO if_xco_cp_gen_env_dev_system,
           lv_del_transport TYPE sxco_transport.
-    lv_del_transport = root_node->transport_request.
+    lv_del_transport = rap_generator->root_node->transport_request.
+
+    IF lv_del_transport IS INITIAL.
+
+      DATA(cts_obj) = xco_cp_abap_repository=>object->for(
+        EXPORTING
+          iv_type   = 'DDLX'
+          iv_name   = to_upper( rap_generator->root_node->rap_node_objects-meta_data_extension )
+
+      )->if_xco_cts_changeable~get_object(  ).
+
+      lv_del_transport = cts_obj->get_lock(  )->get_transport(  ).
+
+      lv_del_transport = xco_cp_cts=>transport->for( lv_del_transport )->get_request(  )->value.
+
+    ENDIF.
+
+
     mo_environment = xco_cp_generation=>environment->dev_system( lv_del_transport ).
     DATA(lo_delete_operation) = mo_environment->for-ddlx->create_delete_operation( ).
-    lo_delete_operation->add_object( root_node->rap_node_objects-meta_data_extension ).
+    lo_delete_operation->add_object( rap_generator->root_node->rap_node_objects-meta_data_extension ).
     lo_delete_operation->execute( ).
 
-    generate_cds_mde( root_node ).
-
+    "generate_cds_mde( CONV #( rap_generator->root_node ) ).
+    generate_cds_mde(
+      EXPORTING
+        io_rap_bo_node   = CONV #( rap_generator->root_node )
+        iv_del_transport = lv_del_transport
+    ).
     out->write( '...END OF GENERATION.' ).
 
   ENDMETHOD.
@@ -280,12 +300,12 @@ CLASS zcl_rap_gen_data_model_#### IMPLEMENTATION.
     ENDLOOP.
   ENDMETHOD.
 
-METHOD get_json_string.
+  METHOD get_json_string.
     " build the json document for DEV260 (ex1-ex4)
     json_string ='{' && |\r\n|  &&
                  '  "implementationType": "managed_uuid",' && |\r\n|  &&
                  '  "transactionalbehavior" : false,' && |\r\n|  &&
-                 '  "publishservice" : false ,' && |\r\n|  &&
+                 '  "publishservice" : true ,' && |\r\n|  &&
                  '  "namespace": "Z",' && |\r\n|  &&
                  |  "suffix": "_{ unique_group_id }",| && |\r\n|  &&
                  '  "prefix": "RAP_",' && |\r\n|  &&
@@ -637,13 +657,13 @@ METHOD get_json_string.
     COMMIT WORK.
   ENDMETHOD.
 
-METHOD generate_cds_mde.
+  METHOD generate_cds_mde.
 
     DATA: pos              TYPE i VALUE 0,
           lo_field         TYPE REF TO if_xco_gen_ddlx_s_fo_field,
           lv_del_transport TYPE sxco_transport.
-
-    lv_del_transport       = io_rap_bo_node->root_node->transport_request.
+    lv_del_transport = iv_del_transport.
+    "lv_del_transport       = io_rap_bo_node->root_node->transport_request.
     DATA(mo_environment)   = xco_cp_generation=>environment->dev_system( lv_del_transport ).
     DATA(mo_put_operation) = mo_environment->create_put_operation( ).
     DATA(lv_package)       = io_rap_bo_node->root_node->package.
